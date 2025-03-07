@@ -1,0 +1,29 @@
+# Versioning and metadata
+.git
+.gitignore
+.dockerignore
+
+# Build dependencies
+node_modules
+dist
+
+# Environment (contains sensitive data)
+# .env.local is needed for build but will be handled via docker-compose
+
+# Files not required for production
+README.md
+CHANGELOG.md
+**/tests
+**/*.test.js
+**/*.spec.js
+.editorconfig
+**/Dockerfile
+docker-compose.yml
+**/.DS_Store
+**/coverage
+.next/cache
+
+# Debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log* 
