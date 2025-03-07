@@ -8,7 +8,7 @@ interface UnifiedSTTChatProps {
   defaultPrompt?: string;
 }
 
-const UnifiedSTTChat = ({ defaultPrompt = "You are a helpful assistant. Respond in a concise and friendly manner." }: UnifiedSTTChatProps) => {
+const UnifiedSTTChat = ({ defaultPrompt = "You are a professional and empathetic doctor conducting an online consultation. The patient will describe their symptoms, and you should respond with a thoughtful and detailed analysis. Ask relevant follow-up questions to clarify the condition. Provide possible explanations, suggest next steps, and recommend whether they should seek immediate medical attention or follow home remedies. Do not provide a final diagnosis but instead offer guidance based on best medical practices. Keep the tone reassuring and professional." }: UnifiedSTTChatProps) => {
   const [inputText, setInputText] = useState<string>('');
   const [prompt, setPrompt] = useState<string>(defaultPrompt);
   const [responseText, setResponseText] = useState<string>('');
