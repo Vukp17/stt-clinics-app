@@ -10,12 +10,14 @@ export interface AssemblyAINanoServiceOptions {
   language?: string;
   sampleRate?: number;
   bufferSize?: number;
+  debug?: boolean;
 }
 
 export interface AssemblyAINanoServiceInstance {
   start: () => Promise<void>;
   stop: () => void;
   isListening: () => boolean;
+  updateLanguage: (newLanguage: string) => void;
 }
 
 // Speech detection state
@@ -34,7 +36,13 @@ export const createAssemblyAINanoService = (options: AssemblyAINanoServiceOption
     language = 'en',
     sampleRate = 16000,
     bufferSize = 4096,
+    debug = true, // Enable debug mode by default
   } = options;
+
+  // Store the language in a variable that can be updated
+  let currentLanguage = language;
+
+  console.log(`Creating AssemblyAINanoService with language: ${currentLanguage}`);
 
   // Service state
   let audioContext: AudioContext | null = null;
@@ -43,6 +51,7 @@ export const createAssemblyAINanoService = (options: AssemblyAINanoServiceOption
   let input: MediaStreamAudioSourceNode | null = null;
   let isCurrentlyListening = false;
   let audioChunks: Float32Array[] = [];
+  let finalizationTimer: NodeJS.Timeout | null = null;
   
   // Speech detection state
   const speechState: SpeechState = {
@@ -53,8 +62,9 @@ export const createAssemblyAINanoService = (options: AssemblyAINanoServiceOption
   };
 
   // Constants for speech detection
-  const noiseThreshold = 0.01;
-  const silenceThreshold = 1500; // in milliseconds
+  const noiseThreshold = 0.005;
+  const silenceThreshold = 1000; // in milliseconds
+  const maxRecordingTime = 3000; // Force finalization after 3 seconds
 
   /**
    * Process audio data from the microphone
@@ -63,22 +73,45 @@ export const createAssemblyAINanoService = (options: AssemblyAINanoServiceOption
     // Add the audio chunk to the buffer
     audioChunks.push(new Float32Array(inputData));
     
+    // Check if we have collected enough audio to force finalization
+    // This is a fallback in case silence detection doesn't work
+    if (audioChunks.length > 50) { // Reduced from 100 to 50 (about 1 second of audio)
+      if (debug) console.log(`Forcing finalization after ${audioChunks.length} chunks`);
+      finalizeSentence();
+      return;
+    }
+    
     // Check if the user is speaking
     const volume = calculateVolume(inputData);
     const now = Date.now();
+    
+    // Log volume occasionally (every 50 chunks to avoid flooding the console)
+    if (debug && audioChunks.length % 10 === 0) {
+      console.log(`Current volume: ${volume.toFixed(4)}, threshold: ${noiseThreshold}, speaking: ${volume > noiseThreshold}`);
+    }
     
     if (volume > noiseThreshold) {
       // User is speaking
       speechState.isSpeaking = true;
       speechState.lastSpeechTime = now;
       speechState.silenceStart = null;
+      
+      // Log when speech is detected
+      if (debug && audioChunks.length % 10 === 0) {
+        console.log('Speech detected');
+      }
     } else if (speechState.isSpeaking) {
       // User was speaking but has stopped
       if (speechState.silenceStart === null) {
         speechState.silenceStart = now;
+        if (debug) console.log('Silence started after speech');
       } else if (now - speechState.silenceStart > silenceThreshold) {
         // Silence has been detected for long enough, finalize the sentence
+        if (debug) console.log(`Silence threshold reached (${now - speechState.silenceStart}ms > ${silenceThreshold}ms), finalizing sentence`);
         finalizeSentence();
+      } else if (debug && audioChunks.length % 10 === 0) {
+        // Log silence duration occasionally
+        console.log(`Silence duration: ${now - speechState.silenceStart}ms / ${silenceThreshold}ms`);
       }
     }
   };
@@ -98,7 +131,12 @@ export const createAssemblyAINanoService = (options: AssemblyAINanoServiceOption
    * Finalize the current sentence and send it to the AssemblyAI Nano API
    */
   const finalizeSentence = async (): Promise<void> => {
-    if (audioChunks.length === 0) return;
+    if (audioChunks.length === 0) {
+      if (debug) console.log('No audio chunks to finalize');
+      return;
+    }
+    
+    if (debug) console.log(`Finalizing sentence with ${audioChunks.length} chunks`);
     
     // Reset speech state
     speechState.isSpeaking = false;
@@ -114,11 +152,15 @@ export const createAssemblyAINanoService = (options: AssemblyAINanoServiceOption
       offset += chunk.length;
     }
     
+    if (debug) console.log(`Created audio buffer with ${totalLength} samples`);
+    
     // Clear audio chunks
     audioChunks = [];
     
     // Convert to WAV format
     const wavBuffer = float32ToWav(audioBuffer, sampleRate);
+    
+    if (debug) console.log(`Converted to WAV format, size: ${wavBuffer.byteLength} bytes`);
     
     try {
       // Notify that transcription is starting
@@ -130,6 +172,9 @@ export const createAssemblyAINanoService = (options: AssemblyAINanoServiceOption
       const formData = new FormData();
       const audioBlob = new Blob([wavBuffer], { type: 'audio/wav' });
       formData.append('audio', audioBlob);
+      formData.append('language', currentLanguage);
+      
+      console.log(`Sending audio to AssemblyAI Nano API with language: ${currentLanguage}`);
       
       const response = await fetch('/api/assemblyai/transcribe', {
         method: 'POST',
@@ -137,14 +182,19 @@ export const createAssemblyAINanoService = (options: AssemblyAINanoServiceOption
       });
       
       if (!response.ok) {
-        throw new Error(`Failed to transcribe audio: ${response.statusText}`);
+        const errorText = await response.text();
+        throw new Error(`Failed to transcribe audio: ${response.statusText}, ${errorText}`);
       }
       
       const data = await response.json();
       
+      if (debug) console.log(`Received response from AssemblyAI Nano API:`, data);
+      
       if (data.text) {
         speechState.currentSentence += data.text + ' ';
         onTranscriptUpdate(speechState.currentSentence.trim());
+      } else {
+        if (debug) console.log('No text in response from AssemblyAI Nano API');
       }
     } catch (error) {
       console.error('Error transcribing audio with AssemblyAI Nano:', error);
@@ -209,6 +259,8 @@ export const createAssemblyAINanoService = (options: AssemblyAINanoServiceOption
   const start = async (): Promise<void> => {
     if (isCurrentlyListening) return;
     
+    console.log(`Starting AssemblyAINanoService with language: ${currentLanguage}`);
+    
     try {
       // Request microphone access
       mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -237,6 +289,19 @@ export const createAssemblyAINanoService = (options: AssemblyAINanoServiceOption
       // Update state
       isCurrentlyListening = true;
       speechState.currentSentence = '';
+      audioChunks = []; // Clear any existing audio chunks
+      
+      // Set up a timer to force finalization after maxRecordingTime
+      if (finalizationTimer) {
+        clearTimeout(finalizationTimer);
+      }
+      
+      finalizationTimer = setTimeout(() => {
+        if (debug) console.log(`Forcing finalization after ${maxRecordingTime}ms timer`);
+        if (audioChunks.length > 0) {
+          finalizeSentence();
+        }
+      }, maxRecordingTime);
       
       console.log('AssemblyAI Nano service started');
     } catch (error) {
@@ -251,33 +316,48 @@ export const createAssemblyAINanoService = (options: AssemblyAINanoServiceOption
   const stop = (): void => {
     if (!isCurrentlyListening) return;
     
+    // Clear the finalization timer
+    if (finalizationTimer) {
+      clearTimeout(finalizationTimer);
+      finalizationTimer = null;
+    }
+    
+    // Finalize any remaining audio
+    if (audioChunks.length > 0) {
+      if (debug) console.log(`Finalizing ${audioChunks.length} chunks on stop`);
+      finalizeSentence();
+    }
+    
     // Disconnect and clean up
     if (processor && input) {
-      processor.disconnect();
-      input.disconnect();
+      try {
+        input.disconnect(processor);
+        processor.disconnect();
+      } catch (e) {
+        console.error('Error disconnecting audio nodes:', e);
+      }
     }
     
+    // Stop the media stream
     if (mediaStream) {
-      mediaStream.getTracks().forEach((track) => track.stop());
+      mediaStream.getTracks().forEach(track => track.stop());
     }
     
-    // Close audio context
+    // Close the audio context
     if (audioContext && audioContext.state !== 'closed') {
-      audioContext.close();
+      try {
+        audioContext.close();
+      } catch (e) {
+        console.error('Error closing audio context:', e);
+      }
     }
     
     // Reset state
-    audioContext = null;
-    mediaStream = null;
     processor = null;
     input = null;
+    mediaStream = null;
+    audioContext = null;
     isCurrentlyListening = false;
-    audioChunks = [];
-    
-    // Finalize any remaining audio
-    if (speechState.isSpeaking) {
-      finalizeSentence();
-    }
     
     console.log('AssemblyAI Nano service stopped');
   };
@@ -289,11 +369,15 @@ export const createAssemblyAINanoService = (options: AssemblyAINanoServiceOption
     return isCurrentlyListening;
   };
 
-  // Return the service instance
+  // Return the service instance with an additional method to update the language
   return {
     start,
     stop,
     isListening,
+    updateLanguage: (newLanguage: string) => {
+      currentLanguage = newLanguage;
+      console.log(`Updated AssemblyAINanoService language to: ${currentLanguage}`);
+    }
   };
 };
 

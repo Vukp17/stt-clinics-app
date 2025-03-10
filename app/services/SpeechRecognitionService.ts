@@ -23,6 +23,7 @@ export interface SpeechRecognitionServiceOptions {
   bufferSize?: number;
   language?: string;
   wordBoost?: string[];
+  debug?: boolean;
 }
 
 // Define the service instance
@@ -33,6 +34,8 @@ export interface SpeechRecognitionServiceInstance {
   getApi: () => STTApi;
   changeApi: (api: STTApi) => void;
   getDuration: () => number;
+  updateLanguage: (language: string) => void;
+  forceFinalize: () => void;
 }
 
 /**
@@ -54,6 +57,7 @@ export const createSpeechRecognitionService = (
     bufferSize = 4096,
     language = 'en-US',
     wordBoost = [],
+    debug = true,
   } = options;
 
   // Service state
@@ -100,17 +104,21 @@ export const createSpeechRecognitionService = (
       case 'whisper':
         return createWhisperService({
           onTranscriptUpdate,
+          onTranscriptionStart,
           apiKey: process.env.NEXT_PUBLIC_OPENAI_API_KEY,
           language: language.split('-')[0], // Convert 'en-US' to 'en'
           sampleRate,
           bufferSize,
+          debug,
         });
       case 'assemblyAINano':
         return createAssemblyAINanoService({
           onTranscriptUpdate,
+          onTranscriptionStart,
           language: language.split('-')[0], // Convert 'en-US' to 'en'
           sampleRate,
           bufferSize,
+          debug,
         });
       case 'googleSpeech':
         return createGoogleSpeechService({
@@ -250,10 +258,10 @@ export const createSpeechRecognitionService = (
     // Update current API
     currentApi = api;
     
-    // Create new service
-    currentService = createService(api);
+    // Create new service with the current API
+    currentService = createService(currentApi);
     
-    console.log(`Changed speech recognition API to: ${api}`);
+    console.log(`Changed API to ${api} with language ${language}`);
   };
 
   /**
@@ -261,6 +269,52 @@ export const createSpeechRecognitionService = (
    */
   const getDuration = (): number => {
     return durationMs;
+  };
+
+  /**
+   * Update the language
+   */
+  const updateLanguage = (newLanguage: string): void => {
+    // Update language
+    options.language = newLanguage;
+    
+    console.log(`Updated language to: ${newLanguage}`);
+    
+    // If the service is listening, stop it
+    if (currentService && currentService.isListening()) {
+      currentService.stop();
+      
+      // Stop tracking duration
+      stopDurationTracking();
+    }
+    
+    // If the current service has an updateLanguage method, use it
+    if (currentService && 'updateLanguage' in currentService) {
+      (currentService as any).updateLanguage(newLanguage.split('-')[0]); // Convert 'en-US' to 'en'
+    } else {
+      // Otherwise, recreate the service with the new language
+      currentService = createService(currentApi);
+    }
+    
+    // Log the current API and language
+    console.log(`Current API: ${currentApi}, Language: ${newLanguage}`);
+  };
+
+  /**
+   * Force finalization of the current audio
+   */
+  const forceFinalize = (): void => {
+    if (!currentService || !currentService.isListening()) {
+      console.log('No active service to finalize');
+      return;
+    }
+    
+    console.log('Forcing finalization of current audio');
+    
+    // For now, the simplest way to force finalization is to stop and restart
+    currentService.stop();
+    
+    // We don't automatically restart here, as the caller should handle that if needed
   };
 
   // Initialize the service
@@ -274,6 +328,8 @@ export const createSpeechRecognitionService = (
     getApi,
     changeApi,
     getDuration,
+    updateLanguage,
+    forceFinalize,
   };
 };
 

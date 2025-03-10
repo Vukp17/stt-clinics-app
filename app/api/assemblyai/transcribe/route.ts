@@ -15,6 +15,9 @@ export async function POST(request: NextRequest) {
     
     const formData = await request.formData();
     const audioFile = formData.get('audio') as File;
+    const language = formData.get('language') as string || 'en';
+    
+    console.log(`AssemblyAI API received language parameter: ${language}`);
     
     if (!audioFile) {
       console.error('No audio file provided');
@@ -49,9 +52,22 @@ export async function POST(request: NextRequest) {
 
     // Transcribe the audio using the Nano model (free tier)
     console.log('Sending request to AssemblyAI Nano model');
+    console.log(`Language selected: ${language}`);
+    
+    // Map language codes to AssemblyAI language codes if needed
+    let languageCode = language;
+    if (language === 'de') {
+      languageCode = 'de'; // German
+    } else if (language === 'en') {
+      languageCode = 'en'; // English (US)
+    }
+    
+    console.log(`Using AssemblyAI language code: ${languageCode}`);
+    
     const transcript = await client.transcripts.transcribe({
       audio: tempFilePath,
-      speech_model: 'nano'
+      speech_model: 'nano',
+      language_code: languageCode
     });
     
     // Clean up the temporary file

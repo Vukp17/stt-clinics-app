@@ -45,6 +45,7 @@ export async function POST(request: NextRequest) {
 
     // Call Whisper API
     console.log('Sending request to OpenAI Whisper API');
+    console.log(`Using language: ${language}`);
     const response = await openai.audio.transcriptions.create({
       file: new File([buffer], 'audio.wav', { type: 'audio/wav' }),
       model: 'whisper-1',
